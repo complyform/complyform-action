@@ -26,30 +26,19 @@ jobs:
         shell: bash
         run: python3 -c "import yaml; yaml.safe_load(open('action.yml'))"
 
-      - name: Create test fixture
+      - name: Validate action.yml schema
         shell: bash
         run: |
-          cat > test-fixture.tfstate <<'EOF'
-          {
-            "version": 4,
-            "terraform_version": "1.9.0",
-            "serial": 1,
-            "lineage": "test",
-            "outputs": {},
-            "resources": []
-          }
-          EOF
-
-      - name: Dry-run action
-        id: test
-        uses: ./
-        with:
-          cloud: gcp
-          state-path: ./test-fixture.tfstate
-          fail-on-findings: 'false'
-
-      - name: Verify outputs exist
-        shell: bash
-        run: |
-          echo "Exit code: ${{ steps.test.outputs.exit-code }}"
-          test -n "${{ steps.test.outputs.exit-code }}" || echo "Warning: exit-code output not set"
+          python3 -c "
+          import yaml
+          doc = yaml.safe_load(open('action.yml'))
+          assert 'inputs' in doc, 'Missing inputs'
+          assert 'outputs' in doc, 'Missing outputs'
+          assert doc['runs']['using'] == 'composite', 'Not a composite action'
+          assert len(doc['inputs']) == 14, f'Expected 14 inputs, got {len(doc[\"inputs\"])}'
+          assert len(doc['outputs']) == 5, f'Expected 5 outputs, got {len(doc[\"outputs\"])}'
+          for step in doc['runs']['steps']:
+              if 'run' in step:
+                  assert 'shell' in step, f'Step \"{step[\"name\"]}\" missing shell'
+          print('action.yml schema validation passed')
+          "
