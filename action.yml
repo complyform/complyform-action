@@ -1,0 +1,172 @@
+name: 'ComplyForm Compliance Scan'
+description: 'Scan Terraform state for compliance gaps across 53 frameworks. Generate gap reports, run policy checks, and push results to the ComplyForm dashboard.'
+author: 'ComplyForm'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'ComplyForm CLI version to install'
+    required: false
+    default: 'latest'
+  cloud:
+    description: 'Target cloud: gcp, aws, or azure'
+    required: true
+  frameworks:
+    description: 'Comma-separated framework IDs (e.g., soc2,hipaa)'
+    required: false
+    default: ''
+  state-path:
+    description: 'Path to Terraform state file'
+    required: false
+    default: './terraform.tfstate'
+  severity:
+    description: 'Minimum severity filter'
+    required: false
+    default: 'all'
+  output-format:
+    description: 'Output format for gap report'
+    required: false
+    default: 'json'
+  license-key:
+    description: 'ComplyForm license key (Pro+). Pass via ${{ secrets.COMPLYFORM_LICENSE_KEY }}'
+    required: false
+    default: ''
+  fail-on-findings:
+    description: 'Exit with failure if compliance findings exist'
+    required: false
+    default: 'true'
+  checkov-custom-dir:
+    description: 'Path to custom Checkov policies directory (Pro+)'
+    required: false
+    default: ''
+  opa-policy-dir:
+    description: 'Path to OPA/Rego policy directory (Team+)'
+    required: false
+    default: ''
+  plan-json-path:
+    description: 'Path to terraform show -json plan output for OPA evaluation'
+    required: false
+    default: ''
+  dashboard-push:
+    description: 'Push results to ComplyForm dashboard (Team+)'
+    required: false
+    default: 'false'
+  project-label:
+    description: 'Dashboard project label'
+    required: false
+    default: ''
+  api-key:
+    description: 'API key for dashboard push. Pass via ${{ secrets.COMPLYFORM_API_KEY }}'
+    required: false
+    default: ''
+
+outputs:
+  score:
+    description: 'Compliance score (0-100)'
+    value: ${{ steps.scan-assess.outputs.score }}
+  findings-count:
+    description: 'Total finding count'
+    value: ${{ steps.scan-assess.outputs.findings-count }}
+  critical-count:
+    description: 'Critical finding count'
+    value: ${{ steps.scan-assess.outputs.critical-count }}
+  report-path:
+    description: 'Path to the generated report file'
+    value: ${{ steps.scan-assess.outputs.report-path }}
+  exit-code:
+    description: 'ComplyForm exit code: 0 (pass), 1 (findings), 2 (runtime error)'
+    value: ${{ steps.scan-assess.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+
+    - name: Install ComplyForm CLI
+      shell: bash
+      run: |
+        if [ "${{ inputs.version }}" = "latest" ]; then
+          uv tool install complyform
+        else
+          uv tool install complyform==${{ inputs.version }}
+        fi
+        complyform --version
+
+    - name: Activate license
+      if: inputs.license-key != ''
+      shell: bash
+      env:
+        COMPLYFORM_LICENSE_KEY: ${{ inputs.license-key }}
+      run: |
+        complyform config activate "$COMPLYFORM_LICENSE_KEY"
+
+    - name: Run scan and assess
+      id: scan-assess
+      shell: bash
+      run: |
+        complyform scan --state=${{ inputs.state-path }} --cloud=${{ inputs.cloud }}
+
+        ASSESS_CMD="complyform assess --format=${{ inputs.output-format }} --output=./complyform-report"
+        if [ -n "${{ inputs.frameworks }}" ]; then
+          ASSESS_CMD="$ASSESS_CMD --frameworks=${{ inputs.frameworks }}"
+        fi
+        if [ "${{ inputs.severity }}" != "all" ]; then
+          ASSESS_CMD="$ASSESS_CMD --severity=${{ inputs.severity }}"
+        fi
+
+        set +e
+        $ASSESS_CMD
+        EXIT_CODE=$?
+        set -e
+
+        echo "exit-code=$EXIT_CODE" >> $GITHUB_OUTPUT
+        echo "score=$(jq -r '.score // 0' ./complyform-report/*.json)" >> $GITHUB_OUTPUT
+        echo "findings-count=$(jq -r '.summary.total_findings // 0' ./complyform-report/*.json)" >> $GITHUB_OUTPUT
+        echo "critical-count=$(jq -r '.summary.critical // 0' ./complyform-report/*.json)" >> $GITHUB_OUTPUT
+        echo "report-path=./complyform-report" >> $GITHUB_OUTPUT
+
+    - name: Run Checkov custom policies
+      if: inputs.checkov-custom-dir != ''
+      shell: bash
+      run: |
+        complyform validate --checkov-dir=${{ inputs.checkov-custom-dir }}
+
+    - name: Run OPA/Conftest
+      if: inputs.opa-policy-dir != '' && inputs.plan-json-path != ''
+      shell: bash
+      run: |
+        complyform validate --opa-dir=${{ inputs.opa-policy-dir }} --plan-json=${{ inputs.plan-json-path }}
+
+    - name: Push to dashboard
+      if: inputs.dashboard-push == 'true'
+      shell: bash
+      env:
+        COMPLYFORM_API_KEY: ${{ inputs.api-key }}
+      run: |
+        complyform dashboard push --project-label=${{ inputs.project-label }}
+
+    - name: Write GitHub Step Summary
+      shell: bash
+      run: |
+        cat >> $GITHUB_STEP_SUMMARY <<'SUMMARY_EOF'
+        ## ComplyForm Compliance Report
+
+        | Metric | Value |
+        |---|---|
+        | **Compliance Score** | ${{ steps.scan-assess.outputs.score }}/100 |
+        | **Total Findings** | ${{ steps.scan-assess.outputs.findings-count }} |
+        | **Critical Findings** | ${{ steps.scan-assess.outputs.critical-count }} |
+        | **Frameworks** | ${{ inputs.frameworks || 'default' }} |
+        | **Cloud** | ${{ inputs.cloud }} |
+
+        [View full report](./complyform-report/)
+        SUMMARY_EOF
+
+    - name: Fail workflow on findings
+      if: inputs.fail-on-findings == 'true' && steps.scan-assess.outputs.exit-code == '1'
+      shell: bash
+      run: |
+        exit 1
