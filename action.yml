@@ -30,7 +30,7 @@ inputs:
     required: false
     default: 'json'
   license-key:
-    description: 'ComplyForm license key (Pro+). Pass via ${{ secrets.COMPLYFORM_LICENSE_KEY }}'
+    description: 'ComplyForm license key (Pro+). Pass as a GitHub secret'
     required: false
     default: ''
   fail-on-findings:
@@ -58,7 +58,7 @@ inputs:
     required: false
     default: ''
   api-key:
-    description: 'API key for dashboard push. Pass via ${{ secrets.COMPLYFORM_API_KEY }}'
+    description: 'API key for dashboard push. Pass as a GitHub secret'
     required: false
     default: ''
 
