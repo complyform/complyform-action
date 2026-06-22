@@ -77,6 +77,7 @@ Features gated to a specific tier will silently skip if the active license does 
 - [ComplyForm Website](https://complyform.dev)
 - [Documentation](https://docs.complyform.dev)
 - [Pricing](https://complyform.dev/pricing)
+- [RIV-Bench (research benchmark)](https://github.com/complyform/remediation-intent-benchmark)
 
 ## License
 
